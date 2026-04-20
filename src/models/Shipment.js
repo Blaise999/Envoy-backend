@@ -132,6 +132,19 @@ const ShipmentSchema = new Schema(
     labelUrls: { type: [String], default: [] },
     proofUrls: { type: [String], default: [] },
 
+    // NEW: goods photos attached at booking (what the parcel looks like)
+    goodsPhotos: { type: [String], default: [] },        // public URLs
+    goodsPhotosMeta: { type: Schema.Types.Mixed, default: [] }, // [{url,name,size}]
+
+    // NEW: opaque key used on the frontend to link draft/photos → shipment
+    shipmentKey: { type: String, default: "", index: true },
+
+    // NEW: payment + promo tracking
+    paymentMethod: { type: String, enum: ["card", "cod", "payInPerson", ""], default: "" },
+    paymentStatus: { type: String, default: "" }, // e.g. "pending_in_person", "paid"
+    promoCode: { type: String, default: "" },
+    testBooking: { type: Boolean, default: false, index: true },
+
     // idempotency (to dedupe client retries)
     idempotencyKey: { type: String, index: true, unique: true, sparse: true },
 

@@ -144,10 +144,21 @@ export const updateShipment = async (req, res) => {
       origin,
       destination,
       notifyNow,
+      notify, // alias
     } = req.body || {};
 
     const s = await Shipment.findById(req.params.id);
     if (!s) return res.status(404).json({ message: "Shipment not found" });
+
+    // Snapshot "before" values to detect real changes
+    const before = {
+      status: s.status,
+      lastLocation: s.lastLocation,
+      from: s.from,
+      to: s.to,
+      eta: s.eta,
+      etaAt: s.etaAt ? new Date(s.etaAt).toISOString() : null,
+    };
 
     // normalize status
     if (status) {
@@ -199,11 +210,32 @@ export const updateShipment = async (req, res) => {
 
     await s.save();
 
-    // ----- OPTIONAL: Notify recipient (auto or forced) -----
-    const shouldNotify = (process.env.EMAIL_AUTO_NOTIFY === "1") || !!notifyNow;
-    const adminMsg = extractAdminMessage(req.body); // <— NEW
+    // ----- AUTO-NOTIFY: detect meaningful changes and email the recipient -----
+    // Fires automatically whenever status, location, origin, destination or ETA
+    // actually changes. Also respects explicit notifyNow / legacy EMAIL_AUTO_NOTIFY.
+    const after = {
+      status: s.status,
+      lastLocation: s.lastLocation,
+      from: s.from,
+      to: s.to,
+      eta: s.eta,
+      etaAt: s.etaAt ? new Date(s.etaAt).toISOString() : null,
+    };
+    const meaningfulChange =
+      before.status !== after.status ||
+      before.lastLocation !== after.lastLocation ||
+      before.from !== after.from ||
+      before.to !== after.to ||
+      before.eta !== after.eta ||
+      before.etaAt !== after.etaAt;
 
-    if (shouldNotify && s.recipientEmail) {
+    const forceNotify = !!notifyNow || !!notify || process.env.EMAIL_AUTO_NOTIFY === "1";
+    const shouldNotify = (meaningfulChange || forceNotify) && !!s.recipientEmail;
+
+    const adminMsg = extractAdminMessage(req.body);
+
+    let emailResult = null;
+    if (shouldNotify) {
       try {
         const brand = {
           name: process.env.BRAND_NAME || "Envoy",
@@ -212,6 +244,19 @@ export const updateShipment = async (req, res) => {
           supportEmail: process.env.SUPPORT_EMAIL || "support@shipenvoy.com",
           address: process.env.BRAND_ADDRESS || "Envoy Logistics",
         };
+
+        // Build the human-readable "what changed" summary for the preheader
+        const diffs = [];
+        if (before.status !== after.status) {
+          diffs.push(`Status → ${statusLabel(after.status)}`);
+        }
+        if (before.lastLocation !== after.lastLocation && after.lastLocation) {
+          diffs.push(`Now in ${after.lastLocation}`);
+        }
+        if (before.from !== after.from) diffs.push(`Origin updated: ${after.from}`);
+        if (before.to !== after.to) diffs.push(`Destination updated: ${after.to}`);
+        if (before.eta !== after.eta && after.eta) diffs.push(`ETA: ${after.eta}`);
+        const changeSummary = diffs.join(" · ");
 
         const { subject, html, text } = buildShipmentUpdateEmail({
           user: { firstName: s.recipientName?.split(" ")[0] || "Customer", email: s.recipientEmail },
@@ -222,19 +267,23 @@ export const updateShipment = async (req, res) => {
             destination: s.to,
             lastUpdate: new Date().toLocaleString(),
             eta: s.eta || (s.etaAt ? new Date(s.etaAt).toLocaleString() : ""),
-            url: `${process.env.APP_URL || ""}/track/${s.trackingNumber || String(s._id)}`
+            url: `${process.env.APP_URL || "https://shipenvoy.com"}/track?ref=${encodeURIComponent(s.trackingNumber || String(s._id))}`,
           },
           brand,
-          adminMessage: adminMsg || undefined, // <— inject edited body
-          preheader: adminMsg?.text || adminMsg?.markdown || (adminMsg?.html ? "Admin note included." : "Shipment update and live tracking inside.")
+          adminMessage: adminMsg || undefined,
+          preheader:
+            adminMsg?.text ||
+            adminMsg?.markdown ||
+            changeSummary ||
+            (adminMsg?.html ? "Admin note included." : "Shipment update and live tracking inside."),
         });
 
-        await sendMail({
+        emailResult = await sendMail({
           to: s.recipientEmail,
           subject,
           html,
           text,
-          reply_to: brand.supportEmail
+          replyTo: brand.supportEmail, // ✅ fixed: was reply_to, sendMail destructures replyTo
         });
       } catch (e) {
         console.error("ℹ️ Auto-notify failed:", e?.message || e);
@@ -242,7 +291,12 @@ export const updateShipment = async (req, res) => {
       }
     }
 
-    return res.json({ message: "Shipment updated", shipment: s, notified: shouldNotify && !!s.recipientEmail });
+    return res.json({
+      message: "Shipment updated",
+      shipment: s,
+      changed: meaningfulChange,
+      notified: !!(shouldNotify && emailResult?.success !== false),
+    });
   } catch (err) {
     if (err?.name === "ValidationError") {
       return res.status(400).json({ message: err.message });
@@ -311,7 +365,7 @@ export const notifyRecipient = async (req, res) => {
       subject: subject || templSubject,
       html,
       text,
-      reply_to: brand.supportEmail
+      replyTo: brand.supportEmail
     });
 
     return res.json({ message: "Notification sent", to: recipient });

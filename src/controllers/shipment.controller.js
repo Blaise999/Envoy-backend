@@ -416,6 +416,22 @@ export const createShipmentPublic = async (req, res) => {
       status: "CREATED",
       timeline: [{ status: "CREATED", at: new Date(), note: "Booking created" }],
 
+      // ✅ Store goods photos + shipment key at top level (schema fields) too
+      goodsPhotos,
+      goodsPhotosMeta: Array.isArray(body.goodsPhotosMeta) ? body.goodsPhotosMeta : [],
+      shipmentKey: shipmentKey || "",
+
+      // ✅ Payment + promo tracking
+      paymentMethod:
+        body.paymentMethod === "card" ||
+        body.paymentMethod === "cod" ||
+        body.paymentMethod === "payInPerson"
+          ? body.paymentMethod
+          : "",
+      paymentStatus: body.paymentStatus || (body.paymentMethod === "payInPerson" ? "pending_in_person" : ""),
+      promoCode: String(body.promoCode || "").trim(),
+      testBooking: !!body.testBooking || String(body.promoCode || "").trim() === "011205",
+
       meta: {
         ...(body.meta || {}),
         source: "web_guest",
@@ -477,21 +493,113 @@ export const trackByTrackingId = async (req, res) => {
 
     // ✅ NEW: return goods photos from meta (schema-safe) + fallback shapes
     const goodsPhotos =
-      s.meta?.goodsPhotos ||
       s.goodsPhotos ||
+      s.meta?.goodsPhotos ||
       s.photos ||
       s.parcel?.goodsPhotos ||
       s.freight?.goodsPhotos ||
       [];
 
+    // Format timeline + updates for the TrackPage UI shape
+    const STATUS_ORDER = [
+      "CREATED",
+      "PICKED_UP",
+      "IN_TRANSIT",
+      "OUT_FOR_DELIVERY",
+      "DELIVERED",
+    ];
+    const STATUS_LABELS = {
+      CREATED: "Ordered",
+      PICKED_UP: "Picked Up",
+      IN_TRANSIT: "In Transit",
+      OUT_FOR_DELIVERY: "Out for Delivery",
+      DELIVERED: "Delivered",
+      EXCEPTION: "Exception",
+      CANCELLED: "Cancelled",
+    };
+    const currentCode = String(s.status || "CREATED").toUpperCase();
+    const currentIdx = STATUS_ORDER.indexOf(currentCode);
+    const rawTimeline = Array.isArray(s.timeline) ? s.timeline : [];
+
+    // Build stepped timeline (Ordered → Delivered), marking done/current
+    const steppedTimeline = STATUS_ORDER.map((code, i) => {
+      const hit = rawTimeline.find((t) => String(t.status).toUpperCase() === code);
+      const isDone = currentIdx >= 0 ? i <= currentIdx : !!hit;
+      const isCurrent = currentIdx >= 0 && i === currentIdx;
+      const when = hit?.at ? new Date(hit.at) : null;
+      return {
+        label: STATUS_LABELS[code] || code,
+        time: when
+          ? when.toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : "—",
+        done: isDone,
+        current: isCurrent,
+        status: code,
+      };
+    });
+
+    // Updates feed (newest first), human-friendly strings
+    const updates = rawTimeline
+      .slice()
+      .reverse()
+      .map((t) => {
+        const when = t.at ? new Date(t.at) : null;
+        return {
+          date: when
+            ? when.toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "",
+          note:
+            t.note ||
+            `Status: ${STATUS_LABELS[String(t.status).toUpperCase()] || t.status}`,
+        };
+      });
+
+    // Human-friendly estimated delivery
+    let estimatedDelivery = s.eta || "";
+    if (s.etaAt) {
+      const d = new Date(s.etaAt);
+      if (!isNaN(d.getTime())) {
+        estimatedDelivery = d.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+      }
+    }
+
+    const weightKg =
+      s.serviceType === "freight"
+        ? (Number(s.freight?.weight || 0) * Number(s.freight?.pallets || 1))
+        : Number(s.parcel?.weight || 0);
+
     return res.json({
       trackingNumber: s.trackingNumber,
       status: uiStatus,
+      statusCode: currentCode,
       eta: s.eta,
+      estimatedDelivery,
       lastLocation: s.lastLocation || null,
       from: s.from || null,
       to: s.to || null,
       serviceType: s.serviceType,
+      service:
+        s.serviceType === "freight"
+          ? `Freight (${s.freight?.mode || "air"})`
+          : (s.parcel?.level
+              ? s.parcel.level.charAt(0).toUpperCase() + s.parcel.level.slice(1)
+              : "Standard"),
+      weight: weightKg ? `${weightKg} kg` : "",
 
       parcel: s.parcel
         ? {
@@ -505,7 +613,9 @@ export const trackByTrackingId = async (req, res) => {
         ? { mode: s.freight.mode, pallets: s.freight.pallets, weight: s.freight.weight }
         : null,
 
-      timeline: s.timeline || [],
+      timeline: steppedTimeline,
+      rawTimeline,
+      updates,
 
       price: s.price,
       currency: s.currency,
