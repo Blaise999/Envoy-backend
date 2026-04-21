@@ -1,19 +1,46 @@
+// src/routes/users.routes.js
 import { Router } from "express";
-import {
-  listUsers,
-  getUserById,
-  updateUser,
-  deleteUser,
-} from "../../controllers/admin/admin.user.controller.js";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth } from "../middleware/auth.js"; // adjust path to your auth middleware
+import UserDetails from "../models/userDetails.model.js"; // ESM default export
 
 const router = Router();
 
-router.use(requireAuth(["admin"])); // all below require admin
+/* ... your existing routes ... */
 
-router.get("/", listUsers);
-router.get("/:id", getUserById);
-router.patch("/:id", updateUser);
-router.delete("/:id", deleteUser);
+// GET /api/users/me/details  -> returns (and if missing, creates) the embedded dashboard doc
+router.get("/me/details", requireAuth, async (req, res, next) => {
+  try {
+    const userId =
+      req.user?.id ||
+      req.user?._id ||
+      req.auth?.userId ||
+      req.auth?.id;
+
+    if (!userId) {
+      return res.status(401).json({ ok: false, message: "Unauthorized" });
+    }
+
+    let doc = await UserDetails.findOne({ user: userId });
+    if (!doc) {
+      doc = await UserDetails.create({ user: userId });
+    }
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
 
 export default router;
+
+
+
+
+
+
+
+
+
+
+
+
+
