@@ -331,6 +331,22 @@ export const createShipment = async (req, res) => {
 export const createShipmentPublic = async (req, res) => {
   try {
     const body = req.body || {};
+
+    // 🔎 Log a compact summary of every incoming public create (safe — no full PII blast)
+    console.log("[createShipmentPublic] incoming:", {
+      serviceType: body.serviceType,
+      from: body.from,
+      to: body.to,
+      recipientEmail: body.recipientEmail ? String(body.recipientEmail).slice(0, 60) : "(missing)",
+      recipientAddress: body.recipientAddress ? String(body.recipientAddress).slice(0, 60) : "(missing)",
+      hasParcel: !!body.parcel,
+      hasFreight: !!body.freight,
+      paymentMethod: body.paymentMethod,
+      promoCode: body.promoCode,
+      goodsPhotosLen: Array.isArray(body.goodsPhotos) ? body.goodsPhotos.length : 0,
+      shipmentKey: body.shipmentKey,
+    });
+
     const serviceType = body.serviceType || inferServiceType(body);
 
     const fromStr = normalizePlace(body.from);
@@ -340,7 +356,7 @@ export const createShipmentPublic = async (req, res) => {
 
     const recipientAddress = normalizeAddress(body.recipientAddress);
     if (serviceType === "parcel" && (!recipientAddress || recipientAddress.length < 6)) {
-      return res.status(400).json({ message: "recipientAddress is required for parcel shipments" });
+      return res.status(400).json({ message: "recipientAddress is required for parcel shipments (minimum 6 characters)" });
     }
 
     const pricing =
@@ -443,8 +459,36 @@ export const createShipmentPublic = async (req, res) => {
 
     return res.status(201).json(doc);
   } catch (err) {
-    console.error("createShipmentPublic error:", err);
-    return res.status(500).json({ message: "Could not create shipment" });
+    console.error("createShipmentPublic error:", err?.name, err?.message, err?.stack);
+
+    // Mongo validation error — list the specific fields that failed
+    if (err?.name === "ValidationError") {
+      const fields = Object.keys(err.errors || {}).map((k) => ({
+        field: k,
+        message: err.errors[k]?.message,
+        kind: err.errors[k]?.kind,
+      }));
+      return res.status(400).json({
+        message: "Validation failed",
+        details: fields,
+        raw: err.message,
+      });
+    }
+
+    // Mongo duplicate key
+    if (err?.code === 11000) {
+      return res.status(409).json({
+        message: "Duplicate key",
+        key: err.keyPattern,
+        value: err.keyValue,
+      });
+    }
+
+    // Everything else — return the actual error message, don't hide it
+    return res.status(500).json({
+      message: err?.message || "Could not create shipment",
+      name: err?.name,
+    });
   }
 };
 
