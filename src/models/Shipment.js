@@ -132,9 +132,11 @@ const ShipmentSchema = new Schema(
     labelUrls: { type: [String], default: [] },
     proofUrls: { type: [String], default: [] },
 
-    // NEW: goods photos attached at booking (what the parcel looks like)
-    goodsPhotos: { type: [String], default: [] },        // public URLs
-    goodsPhotosMeta: { type: Schema.Types.Mixed, default: [] }, // [{url,name,size}]
+    // NEW: goods photos attached at booking
+    // Mixed type — tolerates both URL strings and {url,name,size,...} objects.
+    // Never revert this to [String] — the frontend sends objects from Vercel Blob.
+    goodsPhotos: { type: Schema.Types.Mixed, default: [] },
+    goodsPhotosMeta: { type: Schema.Types.Mixed, default: [] },
 
     // NEW: opaque key used on the frontend to link draft/photos → shipment
     shipmentKey: { type: String, default: "", index: true },

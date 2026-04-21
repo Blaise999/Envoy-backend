@@ -169,7 +169,7 @@ function pickContacts(body) {
 
 const MAX_PHOTOS = 6;
 
-// Allow blob urls + normal https image urls (don’t be overly strict)
+// Allow blob urls + normal https image urls (don't be overly strict)
 function isSafeUrl(u = "") {
   const s = String(u || "");
   if (!s) return false;
@@ -177,42 +177,104 @@ function isSafeUrl(u = "") {
   return true;
 }
 
-function sanitizeGoodsPhotos(input) {
-  const arr = Array.isArray(input) ? input : [];
-  const out = [];
+/**
+ * Normalize an incoming goodsPhotos payload into TWO shapes:
+ *   - urls: string[]     (what schema field `goodsPhotos` expects)
+ *   - meta: object[]     (what schema field `goodsPhotosMeta` expects)
+ *
+ * Accepts:
+ *   - array of strings (urls)
+ *   - array of objects ({url|href, name, pathname, size, contentType})
+ *   - mixed array
+ * Silently drops items that aren't a safe http(s) URL.
+ */
+function splitGoodsPhotos(input) {
+  // Hard tolerance: accept anything (string, string of JSON, array of strings,
+  // array of objects, mixed) and return a clean { urls: string[], meta: object[] }.
+  // Bad input never crashes this function — it just returns empty arrays.
+
+  // Unwrap a single string that's actually a JSON array
+  let arr = input;
+  if (typeof arr === "string") {
+    const trimmed = arr.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        arr = JSON.parse(trimmed);
+      } catch {
+        arr = [];
+      }
+    } else if (isSafeUrl(trimmed)) {
+      arr = [trimmed]; // a single URL as a string
+    } else {
+      arr = [];
+    }
+  }
+  if (!Array.isArray(arr)) arr = [];
+
+  const urls = [];
+  const meta = [];
 
   for (const p of arr) {
     if (!p) continue;
 
-    // allow string url
+    // string url (or JSON-encoded object as a string)
     if (typeof p === "string") {
-      if (!isSafeUrl(p)) continue;
-      out.push({ url: p, name: "Photo" });
+      const s = p.trim();
+      if (s.startsWith("{") || s.startsWith("[")) {
+        // Attempt to recover a URL from a stringified object / inspect dump
+        try {
+          const parsed = JSON.parse(s);
+          const recoveredUrl =
+            parsed?.url ||
+            parsed?.href ||
+            (Array.isArray(parsed) ? null : null);
+          if (isSafeUrl(recoveredUrl)) {
+            urls.push(recoveredUrl);
+            meta.push({ url: recoveredUrl, name: parsed?.name || "Photo" });
+          }
+        } catch {
+          // Regex-extract any https://... we can find, last resort
+          const match = s.match(/https?:\/\/[^\s'"<>\\]+/);
+          if (match && isSafeUrl(match[0])) {
+            urls.push(match[0]);
+            meta.push({ url: match[0], name: "Photo" });
+          }
+        }
+      } else if (isSafeUrl(s)) {
+        urls.push(s);
+        meta.push({ url: s, name: "Photo" });
+      }
+      if (urls.length >= MAX_PHOTOS) break;
       continue;
     }
 
-    // allow object
+    // object with url/href
     if (typeof p === "object") {
       const url = p.url || p.href;
       if (!isSafeUrl(url)) continue;
 
       const ct = String(p.contentType || p.type || "").toLowerCase();
-      // If ct exists, restrict to images; if ct missing, still allow (some clients omit it)
       if (ct && !ct.startsWith("image/")) continue;
 
-      out.push({
+      urls.push(url);
+      meta.push({
         url,
         name: p.name || p.pathname || "Photo",
         pathname: p.pathname || "",
         size: Number(p.size || 0) || 0,
         contentType: p.contentType || p.type || "",
       });
+      if (urls.length >= MAX_PHOTOS) break;
     }
-
-    if (out.length >= MAX_PHOTOS) break;
   }
 
-  return out;
+  return { urls, meta };
+}
+
+// Back-compat alias — old code may still import this
+function sanitizeGoodsPhotos(input) {
+  return splitGoodsPhotos(input).meta;
+}
 }
 
 /* ----------------------- controllers ----------------------- */
@@ -260,10 +322,24 @@ export const createShipment = async (req, res) => {
 
     const contacts = pickContacts(body);
 
-    // ✅ NEW: pull photos from body (or nested) and store in meta (schema-safe)
-    const goodsPhotos = sanitizeGoodsPhotos(
+    // ✅ Split goods photos into strings[] (schema field) and object[] (meta)
+    const { urls: rawAuthedUrls, meta: goodsPhotoMeta } = splitGoodsPhotos(
       body.goodsPhotos || body.parcel?.goodsPhotos || body.freight?.goodsPhotos || []
     );
+    const clientMeta = Array.isArray(body.goodsPhotosMeta)
+      ? splitGoodsPhotos(body.goodsPhotosMeta).meta
+      : [];
+    const combinedMeta = goodsPhotoMeta.length ? goodsPhotoMeta : clientMeta;
+
+    // 🛡️ Force clean string[] no matter what shape came through
+    const goodsPhotoUrls = (Array.isArray(rawAuthedUrls) ? rawAuthedUrls : [])
+      .map((x) => {
+        if (typeof x === "string") return x;
+        if (x && typeof x === "object" && typeof x.url === "string") return x.url;
+        return null;
+      })
+      .filter((s) => typeof s === "string" && /^https?:\/\//i.test(s));
+
     const shipmentKey = String(body.shipmentKey || body.meta?.shipmentKey || "").trim();
 
     const doc = await Shipment.create({
@@ -310,12 +386,28 @@ export const createShipment = async (req, res) => {
       status: "CREATED",
       timeline: [{ status: "CREATED", at: new Date(), note: "Booking created" }],
 
+      // ✅ Top-level schema fields (strings array + mixed meta)
+      goodsPhotos: goodsPhotoUrls,
+      goodsPhotosMeta: combinedMeta,
+      shipmentKey: shipmentKey || "",
+
+      // Payment + promo tracking
+      paymentMethod:
+        body.paymentMethod === "card" ||
+        body.paymentMethod === "cod" ||
+        body.paymentMethod === "payInPerson"
+          ? body.paymentMethod
+          : "",
+      paymentStatus: body.paymentStatus || (body.paymentMethod === "payInPerson" ? "pending_in_person" : ""),
+      promoCode: String(body.promoCode || "").trim(),
+      testBooking: !!body.testBooking || String(body.promoCode || "").trim() === "011205",
+
       meta: {
         ...(body.meta || {}),
         source: req.user ? "web_auth" : "web_guest",
         contacts,
         shipmentKey: shipmentKey || undefined,
-        goodsPhotos, // ✅ stored here so it always persists even if schema is strict
+        goodsPhotos: combinedMeta, // ✅ full metadata in meta for back-compat
       },
     });
 
@@ -382,10 +474,38 @@ export const createShipmentPublic = async (req, res) => {
 
     const contacts = pickContacts(body);
 
-    // ✅ NEW: save goods photos in meta
-    const goodsPhotos = sanitizeGoodsPhotos(
+    // ✅ Split goods photos into strings[] (schema field) and object[] (meta)
+    const { urls: rawGoodsPhotoUrls, meta: goodsPhotoMeta } = splitGoodsPhotos(
       body.goodsPhotos || body.parcel?.goodsPhotos || body.freight?.goodsPhotos || []
     );
+    // Also accept separately-supplied meta array from client
+    const clientMeta = Array.isArray(body.goodsPhotosMeta)
+      ? splitGoodsPhotos(body.goodsPhotosMeta).meta
+      : [];
+    const combinedMeta = goodsPhotoMeta.length ? goodsPhotoMeta : clientMeta;
+
+    // 🛡️ Last line of defense: force a clean string[] no matter what came in.
+    // If this is ever corrupted (object, nested array, stringified dump),
+    // we'd rather save the shipment with zero photos than 500 the booking.
+    const goodsPhotoUrls = (Array.isArray(rawGoodsPhotoUrls) ? rawGoodsPhotoUrls : [])
+      .map((x) => {
+        if (typeof x === "string") return x;
+        if (x && typeof x === "object" && typeof x.url === "string") return x.url;
+        return null;
+      })
+      .filter((s) => typeof s === "string" && /^https?:\/\//i.test(s));
+
+    if (goodsPhotoUrls.length === 0 && (body.goodsPhotos || body.goodsPhotosMeta)) {
+      console.warn(
+        "[createShipmentPublic] goodsPhotos received but none valid after sanitization. Raw type:",
+        typeof body.goodsPhotos,
+        "Array?:",
+        Array.isArray(body.goodsPhotos),
+        "First:",
+        Array.isArray(body.goodsPhotos) ? body.goodsPhotos[0] : body.goodsPhotos
+      );
+    }
+
     const shipmentKey = String(body.shipmentKey || body.meta?.shipmentKey || "").trim();
 
     const doc = await Shipment.create({
@@ -432,9 +552,10 @@ export const createShipmentPublic = async (req, res) => {
       status: "CREATED",
       timeline: [{ status: "CREATED", at: new Date(), note: "Booking created" }],
 
-      // ✅ Store goods photos + shipment key at top level (schema fields) too
-      goodsPhotos,
-      goodsPhotosMeta: Array.isArray(body.goodsPhotosMeta) ? body.goodsPhotosMeta : [],
+      // ✅ goodsPhotos is [String] in schema → must be url strings
+      goodsPhotos: goodsPhotoUrls,
+      // ✅ goodsPhotosMeta is Mixed → keep the full objects here
+      goodsPhotosMeta: combinedMeta,
       shipmentKey: shipmentKey || "",
 
       // ✅ Payment + promo tracking
@@ -453,7 +574,9 @@ export const createShipmentPublic = async (req, res) => {
         source: "web_guest",
         contacts,
         shipmentKey: shipmentKey || undefined,
-        goodsPhotos,
+        // Keep full metadata in meta.goodsPhotos for back-compat with any older
+        // readers that expected objects there
+        goodsPhotos: combinedMeta,
       },
     });
 
@@ -535,14 +658,25 @@ export const trackByTrackingId = async (req, res) => {
       address: s.recipientAddress || contacts.recipient?.address || "",
     };
 
-    // ✅ NEW: return goods photos from meta (schema-safe) + fallback shapes
-    const goodsPhotos =
-      s.goodsPhotos ||
-      s.meta?.goodsPhotos ||
-      s.photos ||
-      s.parcel?.goodsPhotos ||
-      s.freight?.goodsPhotos ||
-      [];
+    // ✅ NEW: return goods photos — schema field is now string[] of URLs.
+    // Merge with meta.goodsPhotos (old docs) and handle any remaining object shapes.
+    const rawPhotos = [
+      ...(Array.isArray(s.goodsPhotos) ? s.goodsPhotos : []),
+      ...(Array.isArray(s.goodsPhotosMeta) ? s.goodsPhotosMeta : []),
+      ...(Array.isArray(s.meta?.goodsPhotos) ? s.meta.goodsPhotos : []),
+      ...(Array.isArray(s.photos) ? s.photos : []),
+      ...(Array.isArray(s.parcel?.goodsPhotos) ? s.parcel.goodsPhotos : []),
+      ...(Array.isArray(s.freight?.goodsPhotos) ? s.freight.goodsPhotos : []),
+    ];
+    const seen = new Set();
+    const goodsPhotos = [];
+    for (const p of rawPhotos) {
+      const url = typeof p === "string" ? p : (p?.url || p?.href || "");
+      if (!url || seen.has(url)) continue;
+      if (!/^https?:\/\//i.test(url)) continue;
+      seen.add(url);
+      goodsPhotos.push(url);
+    }
 
     // Format timeline + updates for the TrackPage UI shape
     const STATUS_ORDER = [
