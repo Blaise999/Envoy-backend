@@ -275,7 +275,6 @@ function splitGoodsPhotos(input) {
 function sanitizeGoodsPhotos(input) {
   return splitGoodsPhotos(input).meta;
 }
-}
 
 /* ----------------------- controllers ----------------------- */
 
