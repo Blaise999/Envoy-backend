@@ -26,11 +26,14 @@ const LABEL_TO_CODE = {
 
 function normalizeStatus(input) {
   if (!input) return null;
+
   const raw = String(input).trim();
   const up = raw.toUpperCase().replace(/[\s-]+/g, "_");
+
   if (STATUS_CODES.includes(up)) return up;
 
   const lbl = raw.toUpperCase().replace(/[\s_]+/g, " ");
+
   return LABEL_TO_CODE[lbl] || null;
 }
 
@@ -54,18 +57,23 @@ function statusLabel(code) {
   }
 }
 
-/* ---------- URL helper ---------- */
+/* ---------- URL helpers ---------- */
 function getAppUrl() {
-  return (process.env.APP_URL || "https://shipenvoy.com").replace(/\/+$/, "");
+  return (process.env.APP_URL || "https://www.shipenvoy.com").replace(/\/+$/, "");
 }
 
 function buildTrackingUrl(shipmentOrTracking, fallbackId) {
-  const code = shipmentOrTracking?.trackingNumber || fallbackId || shipmentOrTracking?._id;
-  return `${getAppUrl()}/track/${encodeURIComponent(String(code))}`;
+  const code =
+    shipmentOrTracking?.trackingNumber ||
+    fallbackId ||
+    shipmentOrTracking?._id;
+
+  return `${getAppUrl()}/track?ref=${encodeURIComponent(String(code))}`;
 }
 
 /* ---------- helpers: map admin body -> template.adminMessage ---------- */
 function extractAdminMessage(body = {}) {
+  // accept simple fields or the nested object
   const nested = body.adminMessage || {};
 
   const text = body.message ?? body.note ?? nested.text;
@@ -131,7 +139,9 @@ export const listAllShipments = async (req, res) => {
       Shipment.countDocuments(where),
     ]);
 
-    if (flat || !pagingRequested) return res.json(items);
+    if (flat || !pagingRequested) {
+      return res.json(items);
+    }
 
     return res.json({
       items,
@@ -162,6 +172,15 @@ export const getShipmentById = async (req, res) => {
 };
 
 /* ---------- PATCH: PATCH /api/admin/shipments/:id ---------- */
+/**
+ * body: {
+ *   status, lastLocation, note, eta, etaAt, from|origin, to|destination,
+ *   message, messageHtml, messageMarkdown,
+ *   messageTitle, messagePlacement,
+ *   adminMessage: { html|markdown|text, title, placement },
+ *   notifyNow: boolean
+ * }
+ */
 export const updateShipment = async (req, res) => {
   try {
     const {
@@ -184,6 +203,7 @@ export const updateShipment = async (req, res) => {
       return res.status(404).json({ message: "Shipment not found" });
     }
 
+    // Snapshot "before" values to detect real changes
     const before = {
       status: s.status,
       lastLocation: s.lastLocation,
@@ -193,6 +213,7 @@ export const updateShipment = async (req, res) => {
       etaAt: s.etaAt ? new Date(s.etaAt).toISOString() : null,
     };
 
+    // normalize status
     if (status) {
       const code = normalizeStatus(status);
 
@@ -203,6 +224,7 @@ export const updateShipment = async (req, res) => {
       s.status = code;
     }
 
+    // allow clearing with empty string
     if (lastLocation !== undefined) {
       s.lastLocation = String(lastLocation).trim();
     }
@@ -221,6 +243,7 @@ export const updateShipment = async (req, res) => {
       s.etaAt = dt;
     }
 
+    // ----- ORIGIN / DESTINATION -----
     const nextFrom = from !== undefined ? from : origin;
     const nextTo = to !== undefined ? to : destination;
 
@@ -244,6 +267,7 @@ export const updateShipment = async (req, res) => {
       }
     }
 
+    // timeline entry
     s.timeline.push({
       status: s.status || "CREATED",
       at: new Date(),
@@ -258,6 +282,7 @@ export const updateShipment = async (req, res) => {
 
     await s.save();
 
+    // ----- AUTO-NOTIFY -----
     const after = {
       status: s.status,
       lastLocation: s.lastLocation,
@@ -294,6 +319,7 @@ export const updateShipment = async (req, res) => {
           address: process.env.BRAND_ADDRESS || "Envoy Logistics",
         };
 
+        // Build the human-readable "what changed" summary for the preheader
         const diffs = [];
 
         if (before.status !== after.status) {
@@ -352,6 +378,7 @@ export const updateShipment = async (req, res) => {
         });
       } catch (e) {
         console.error("ℹ️ Auto-notify failed:", e?.message || e);
+        // Do not fail the admin update if email fails
       }
     }
 
@@ -372,6 +399,14 @@ export const updateShipment = async (req, res) => {
 };
 
 /* ---------- POST NOTIFY: POST /api/admin/shipments/:id/notify ---------- */
+/**
+ * body may include:
+ *  - subject override
+ *  - to override recipient
+ *  - message | messageHtml | messageMarkdown
+ *  - messageTitle | messagePlacement
+ *  - adminMessage: { html|markdown|text, title, placement }
+ */
 export const notifyRecipient = async (req, res) => {
   try {
     const { id } = req.params;
