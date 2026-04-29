@@ -1,6 +1,7 @@
 // /src/routes/admin/users.details.routes.js
 import { Router } from "express";
 import mongoose from "mongoose";
+import { requireAuth } from "../../middleware/auth.js";
 
 // Ensure model is registered
 import "../../models/userDetails.model.js";
@@ -8,11 +9,11 @@ import "../../models/userDetails.model.js";
 const UserDetails = mongoose.model("UserDetails");
 const router = Router();
 
-/* ---------- Auth helpers (assumes req.user is set by a global requireAuth) ---------- */
-function requireAdmin(req, res, next) {
-  if (req.user && (req.user.role === "admin" || req.user.isAdmin)) return next();
-  return res.status(403).json({ message: "Admin only" });
-}
+/* ---------- Auth: require a verified admin JWT on every route ----------
+   The previous version had a local requireAdmin that read req.user but
+   no JWT middleware ever ran, so every call returned 403.
+---------------------------------------------------------------------- */
+router.use(requireAuth(["admin"]));
 
 /* ---------- Utils ---------- */
 function defaultDashboard() {
@@ -21,6 +22,10 @@ function defaultDashboard() {
     addresses: [],
     paymentMethods: [],
     pickups: [],
+    quotes: [],
+    supportTickets: [],
+    notificationPrefs: { email: true, sms: false, whatsapp: false },
+    profile: {},
     billing: {
       currency: "EUR",
       totalSpend: 0,
@@ -28,18 +33,16 @@ function defaultDashboard() {
       inTransitCount: 0,
       exceptionCount: 0,
       byMonth: [],
-      lastComputedAt: new Date()
+      lastComputedAt: new Date(),
     },
-    adminOverlay: { active: false }
+    adminOverlay: { active: false },
   };
 }
 
 function asMergedView(doc) {
   if (!doc) return defaultDashboard();
-  // prefer model helper if available
   if (typeof doc.toDashboardView === "function") return doc.toDashboardView();
 
-  // fallback merge (minimal)
   const useOverlay = !!doc.adminOverlay?.active;
   const pickArr = (realArr = [], overlayArr = []) =>
     (realArr && realArr.length) ? realArr : (useOverlay ? (overlayArr || []) : []);
@@ -51,7 +54,7 @@ function asMergedView(doc) {
     inTransitCount: Number(doc.adminOverlay?.numbers?.inTransitCount ?? doc.billing?.inTransitCount ?? 0),
     exceptionCount: Number(doc.adminOverlay?.numbers?.exceptionCount ?? doc.billing?.exceptionCount ?? 0),
     byMonth: Array.isArray(doc.billing?.byMonth) ? doc.billing.byMonth : [],
-    lastComputedAt: doc.billing?.lastComputedAt || new Date()
+    lastComputedAt: doc.billing?.lastComputedAt || new Date(),
   };
 
   return {
@@ -64,21 +67,25 @@ function asMergedView(doc) {
     addresses: pickArr(doc.addresses, doc.adminOverlay?.bundleSnapshot?.addresses),
     paymentMethods: pickArr(doc.paymentMethods, doc.adminOverlay?.bundleSnapshot?.paymentMethods),
     pickups: pickArr(doc.pickups, doc.adminOverlay?.bundleSnapshot?.pickups),
+    quotes: doc.quotes || [],
+    supportTickets: doc.supportTickets || [],
+    notificationPrefs: doc.notificationPrefs || {},
+    profile: doc.profile || {},
     billing: mergedBilling,
     adminOverlay: {
       active: useOverlay,
       appliedBy: doc.adminOverlay?.appliedBy || null,
       appliedAt: doc.adminOverlay?.appliedAt || null,
-      text: doc.adminOverlay?.text || {}
+      text: doc.adminOverlay?.text || {},
     },
     meta: doc.meta || { source: "user" },
     updatedAt: doc.updatedAt,
-    createdAt: doc.createdAt
+    createdAt: doc.createdAt,
   };
 }
 
 /* ---------- GET /api/admin/users/:id/details ---------- */
-router.get("/:id/details", requireAdmin, async (req, res) => {
+router.get("/:id/details", async (req, res) => {
   try {
     const { id } = req.params;
     const merged = String(req.query.merged ?? "1") === "1";
@@ -102,7 +109,7 @@ router.get("/:id/details", requireAdmin, async (req, res) => {
 });
 
 /* ---------- PUT /api/admin/users/:id/details?recompute=0|1&merged=0|1 ---------- */
-router.put("/:id/details", requireAdmin, async (req, res) => {
+router.put("/:id/details", async (req, res) => {
   try {
     const { id } = req.params;
     const wantRecompute = String(req.query.recompute ?? "1") === "1";
@@ -117,9 +124,10 @@ router.put("/:id/details", requireAdmin, async (req, res) => {
 
     const payload = req.body || {};
     const allowed = [
-      "displayName","email","phone","roles",
-      "shipments","addresses","paymentMethods","pickups",
-      "billing","adminOverlay","meta"
+      "displayName", "email", "phone", "roles",
+      "shipments", "addresses", "paymentMethods", "pickups",
+      "quotes", "supportTickets", "notificationPrefs", "profile",
+      "billing", "adminOverlay", "meta",
     ];
     for (const k of allowed) {
       if (Object.prototype.hasOwnProperty.call(payload, k)) {

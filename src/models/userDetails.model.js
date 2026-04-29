@@ -20,15 +20,12 @@ const ShipmentLiteSchema = new Schema(
     to: { type: String, default: "—" },
     toName: { type: String, default: "" },
 
-    // Parcel/freight UI fields
     pieces: { type: Number, default: 1, min: 0 },
     weightKg: { type: Number, default: 0, min: 0 },
 
-    // Money
     price: { type: Number, default: 0, min: 0 },
     currency: { type: String, default: "EUR" },
 
-    // Source linkage if you have a canonical Shipment collection
     shipmentRef: { type: Types.ObjectId, ref: "Shipment" },
 
     createdAt: { type: Date, default: Date.now, index: true },
@@ -37,8 +34,6 @@ const ShipmentLiteSchema = new Schema(
 );
 
 ShipmentLiteSchema.index({ status: 1, createdAt: -1, service: 1 }, { name: "idx_shipments_status_created_service" });
-
-// Quick text search for UI “Search” box (tracking/from/to/service/name)
 ShipmentLiteSchema.index(
   { trackingNumber: "text", from: "text", to: "text", toName: "text", service: "text" },
   { name: "text_shipments_quick" }
@@ -46,8 +41,8 @@ ShipmentLiteSchema.index(
 
 const AddressSchema = new Schema(
   {
-    label: String, // "HQ", "Warehouse" etc
-    name: String,  // Contact person / company
+    label: String,
+    name: String,
     line1: String,
     line2: String,
     city: String,
@@ -56,7 +51,6 @@ const AddressSchema = new Schema(
     country: String,
     phone: String,
     isDefault: { type: Boolean, default: false },
-    // Optional external id if synced from another service
     externalId: String,
   },
   { _id: true, timestamps: true }
@@ -64,14 +58,14 @@ const AddressSchema = new Schema(
 
 const PaymentMethodSchema = new Schema(
   {
-    label: String,           // "Corporate Visa"
-    brand: String,           // "visa", "mastercard"
-    last4: String,           // "4242"
+    label: String,
+    brand: String,
+    last4: String,
     expMonth: Number,
     expYear: Number,
     default: { type: Boolean, default: false },
     provider: { type: String, enum: ["stripe", "paystack", "flutterwave", "mock"], default: "mock" },
-    externalId: String,      // pm_xxx or token
+    externalId: String,
     status: { type: String, enum: ["valid", "expired", "in_review", "inactive"], default: "valid" },
   },
   { _id: true, timestamps: true }
@@ -79,12 +73,10 @@ const PaymentMethodSchema = new Schema(
 
 const PickupSchema = new Schema(
   {
-    // Keep the human ID visible in UI (e.g., "PUABC12")
     publicId: { type: String, index: true },
-    date: { type: Date, required: true },     // normalize from UI input
+    date: { type: Date, required: true },
     window: { type: String, default: "13:00–17:00" },
 
-    // Either link to an address or keep a flattened snapshot (both is safest)
     addressRef: { type: Types.ObjectId },
     addressText: String,
 
@@ -104,9 +96,84 @@ const PickupSchema = new Schema(
   { _id: true }
 );
 
+/* ---------------- NEW: Quotes ---------------- */
+const QuoteSchema = new Schema(
+  {
+    publicId: { type: String, index: true },
+    from: String,
+    to: String,
+    service: { type: String, default: "Standard" },
+    weightKg: { type: Number, default: 0, min: 0 },
+    pieces: { type: Number, default: 1, min: 0 },
+    price: { type: Number, default: 0, min: 0 },
+    currency: { type: String, default: "EUR" },
+    expiresAt: { type: Date },
+    status: { type: String, enum: ["active", "expired", "converted"], default: "active" },
+    notes: String,
+  },
+  { _id: true, timestamps: true }
+);
+
+/* ---------------- NEW: Support tickets ---------------- */
+const SupportMessageSchema = new Schema(
+  {
+    sender: { type: String, enum: ["user", "admin"], default: "user" },
+    text: { type: String, default: "" },
+    at: { type: Date, default: Date.now },
+    attachments: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
+const SupportTicketSchema = new Schema(
+  {
+    publicId: { type: String, index: true },
+    subject: { type: String, default: "Support request" },
+    category: {
+      type: String,
+      enum: ["delayed", "lost", "damaged", "wrong_address", "payment", "refund", "general"],
+      default: "general",
+    },
+    relatedTracking: { type: String, default: "" },
+    status: { type: String, enum: ["open", "pending", "resolved", "closed"], default: "open", index: true },
+    messages: { type: [SupportMessageSchema], default: [] },
+  },
+  { _id: true, timestamps: true }
+);
+
+/* ---------------- NEW: notification prefs + profile ---------------- */
+const NotificationPrefsSchema = new Schema(
+  {
+    email: { type: Boolean, default: true },
+    sms: { type: Boolean, default: false },
+    whatsapp: { type: Boolean, default: false },
+    pickup: { type: Boolean, default: true },
+    transit: { type: Boolean, default: true },
+    delivered: { type: Boolean, default: true },
+    delays: { type: Boolean, default: true },
+    promos: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+const ProfileSchema = new Schema(
+  {
+    accountType: { type: String, enum: ["individual", "business"], default: "individual" },
+    company: String,
+    taxId: String,
+    contactPerson: String,
+    businessAddress: String,
+    referral: String,
+    avatarUrl: String,
+    loyaltyTier: { type: String, default: "Bronze" },
+    referralCode: String,
+  },
+  { _id: false, strict: false, minimize: false }
+);
+
 const BillingByMonthSchema = new Schema(
   {
-    ym: { type: String, required: true }, // "YYYY-MM"
+    ym: { type: String, required: true },
     sum: { type: Number, default: 0 },
   },
   { _id: false }
@@ -116,43 +183,43 @@ const BillingByMonthSchema = new Schema(
 
 const UserDetailsSchema = new Schema(
   {
-    // One doc per user
     user: { type: Types.ObjectId, ref: "User", required: true, unique: true, index: true },
 
-    /* Profile */
     displayName: String,
     email: { type: String, index: true },
     phone: String,
-    roles: { type: [String], default: ["customer"] }, // e.g., ["customer", "admin"]
+    roles: { type: [String], default: ["customer"] },
 
-    /* Dashboard data (UI-shaped) — strict, real embedded */
     shipments: { type: [ShipmentLiteSchema], default: [] },
     addresses: { type: [AddressSchema], default: [] },
     paymentMethods: { type: [PaymentMethodSchema], default: [] },
     pickups: { type: [PickupSchema], default: [] },
 
-    /* Billing aggregates (fast reads for Billing tab) */
+    /* NEW arrays/sub-docs */
+    quotes: { type: [QuoteSchema], default: [] },
+    supportTickets: { type: [SupportTicketSchema], default: [] },
+    notificationPrefs: { type: NotificationPrefsSchema, default: () => ({}) },
+    profile: { type: ProfileSchema, default: () => ({}) },
+
     billing: {
       currency: { type: String, default: "EUR" },
       totalSpend: { type: Number, default: 0 },
       deliveredCount: { type: Number, default: 0 },
       inTransitCount: { type: Number, default: 0 },
       exceptionCount: { type: Number, default: 0 },
-      byMonth: { type: [BillingByMonthSchema], default: [] }, // last 6 months precomputed
+      byMonth: { type: [BillingByMonthSchema], default: [] },
       lastComputedAt: { type: Date },
+      walletBalance: { type: Number, default: 0 },
     },
 
-    /* Admin overlay controls (for seeded/faked dashboards) — LOOSE on purpose */
     adminOverlay: {
-      active: { type: Boolean, default: false }, // if true, UI can choose to show overlay elements first
-      appliedBy: { type: Types.ObjectId, ref: "User" }, // admin user id
+      active: { type: Boolean, default: false },
+      appliedBy: { type: Types.ObjectId, ref: "User" },
       appliedAt: { type: Date },
 
-      // Allow quick tile overrides (no schema fights)
-      numbers: { type: Schema.Types.Mixed, default: {} }, // e.g. { totalSpend, deliveredCount, inTransitCount, exceptionCount, totalShipments }
-      text:    { type: Schema.Types.Mixed, default: {} }, // e.g. { banner }
+      numbers: { type: Schema.Types.Mixed, default: {} },
+      text:    { type: Schema.Types.Mixed, default: {} },
 
-      // Optional storage of the original bundle for auditing (flexible for Compass edits)
       bundleSnapshot: new Schema(
         {
           shipments:      { type: [Schema.Types.Mixed], default: [] },
@@ -164,13 +231,12 @@ const UserDetailsSchema = new Schema(
       ),
     },
 
-    /* Audit */
     meta: {
-      source: { type: String, default: "user" }, // "user" | "overlay" | "merge"
+      source: { type: String, default: "user" },
       notes: String,
     },
   },
-  { timestamps: true, minimize: false } // keep empty objects (esp. in overlay)
+  { timestamps: true, minimize: false }
 );
 
 /* ---------------------------- Helper utilities --------------------------- */
@@ -182,14 +248,13 @@ function ymKey(date) {
   return `${y}-${m}`;
 }
 
-function computeBillingFromEmbedded(shipments, currency = "EUR", monthsBack = 6) {
+function computeBillingFromEmbedded(shipments, currency = "EUR", monthsBack = 6, walletBalance = 0) {
   const delivered = shipments.filter((s) => s.status === "Delivered").length;
   const inTransit = shipments.filter((s) => s.status === "In Transit").length;
   const exception = shipments.filter((s) => s.status === "Exception").length;
 
   const total = shipments.reduce((acc, s) => acc + (Number(s.price) || 0), 0);
 
-  // Build last N months buckets (including current month)
   const now = new Date();
   const keys = [];
   for (let i = monthsBack - 1; i >= 0; i--) {
@@ -211,19 +276,18 @@ function computeBillingFromEmbedded(shipments, currency = "EUR", monthsBack = 6)
     exceptionCount: exception,
     byMonth: keys.map((k) => ({ ym: k, sum: Math.round((sums[k] || 0) * 100) / 100 })),
     lastComputedAt: new Date(),
+    walletBalance: Math.round((walletBalance || 0) * 100) / 100,
   };
 }
 
 /* ------------------------------ Schema methods --------------------------- */
 
-// Use when you updated shipments/overlay & want billing fast.
 UserDetailsSchema.methods.recomputeBilling = function () {
-  this.billing = computeBillingFromEmbedded(this.shipments, this.billing?.currency || "EUR");
+  const wallet = this.billing?.walletBalance || 0;
+  this.billing = computeBillingFromEmbedded(this.shipments, this.billing?.currency || "EUR", 6, wallet);
   return this.billing;
 };
 
-// Merge a *loose* overlay bundle (like your AdminMock.get(userId)) into the STRICT embedded arrays.
-// options = { prepend: true } to show overlay rows first (your UI merges overlay before base)
 UserDetailsSchema.methods.applyOverlayBundle = function (bundle = {}, adminId = null, options = { prepend: true }) {
   const { shipments = [], addresses = [], payments = [], pickups = [] } = bundle;
 
@@ -323,7 +387,7 @@ UserDetailsSchema.methods.applyOverlayBundle = function (bundle = {}, adminId = 
     numbers: this.adminOverlay?.numbers || {},
     text: this.adminOverlay?.text || {},
     bundleSnapshot: {
-      shipments: shipments,       // keep raw Mixed snapshot for auditing
+      shipments: shipments,
       addresses: addresses,
       paymentMethods: payments,
       pickups: pickups,
@@ -333,11 +397,6 @@ UserDetailsSchema.methods.applyOverlayBundle = function (bundle = {}, adminId = 
   this.recomputeBilling();
 };
 
-/**
- * Returns the merged view the dashboard expects.
- * - Real arrays win. If empty and overlay.active, falls back to overlay bundle arrays (Mixed).
- * - Billing starts from stored `billing`; overlay.numbers (if present) override top-line counts/totals.
- */
 UserDetailsSchema.methods.toDashboardView = function () {
   const useOverlay = !!this.adminOverlay?.active;
 
@@ -349,10 +408,7 @@ UserDetailsSchema.methods.toDashboardView = function () {
   const mergedPayments  = arr(this.paymentMethods, this.adminOverlay?.bundleSnapshot?.paymentMethods || []);
   const mergedPickups   = arr(this.pickups, this.adminOverlay?.bundleSnapshot?.pickups || []);
 
-  // Start from computed/stored billing
-  const baseBilling = this.billing || { currency: "EUR", totalSpend: 0, deliveredCount: 0, inTransitCount: 0, exceptionCount: 0, byMonth: [] };
-
-  // Overlay can override headline numbers only (keeps currency/byMonth)
+  const baseBilling = this.billing || { currency: "EUR", totalSpend: 0, deliveredCount: 0, inTransitCount: 0, exceptionCount: 0, byMonth: [], walletBalance: 0 };
   const ovrNums = (useOverlay && this.adminOverlay?.numbers) ? this.adminOverlay.numbers : null;
 
   const mergedBilling = {
@@ -361,6 +417,7 @@ UserDetailsSchema.methods.toDashboardView = function () {
     deliveredCount: Number(ovrNums?.deliveredCount ?? baseBilling.deliveredCount ?? 0),
     inTransitCount: Number(ovrNums?.inTransitCount ?? baseBilling.inTransitCount ?? 0),
     exceptionCount: Number(ovrNums?.exceptionCount ?? baseBilling.exceptionCount ?? 0),
+    walletBalance: Number(ovrNums?.walletBalance ?? baseBilling.walletBalance ?? 0),
     byMonth: Array.isArray(baseBilling.byMonth) ? baseBilling.byMonth : [],
     lastComputedAt: baseBilling.lastComputedAt || new Date(),
   };
@@ -376,10 +433,13 @@ UserDetailsSchema.methods.toDashboardView = function () {
     addresses: mergedAddresses,
     paymentMethods: mergedPayments,
     pickups: mergedPickups,
+    quotes: this.quotes || [],
+    supportTickets: this.supportTickets || [],
+    notificationPrefs: this.notificationPrefs || {},
+    profile: this.profile || {},
 
     billing: mergedBilling,
 
-    // Optional: expose overlay meta so UI can show a small badge if desired
     adminOverlay: {
       active: useOverlay,
       appliedBy: this.adminOverlay?.appliedBy || null,
@@ -404,8 +464,8 @@ UserDetailsSchema.pre("save", function (next) {
 /* ------------------------------ Static helpers --------------------------- */
 
 UserDetailsSchema.statics.refreshFromShipmentCollection = async function (userId, currency = "EUR", monthsBack = 6) {
-  const Shipment = mongoose.model("Shipment"); // assumes you have a Shipment model
-  const shipments = await Shipment.find({ user: userId })
+  const Shipment = mongoose.model("Shipment");
+  const shipments = await Shipment.find({ userId: userId })
     .select("_id trackingNumber price currency status serviceType parcel freight from to recipientEmail createdAt")
     .lean();
 
