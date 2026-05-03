@@ -315,7 +315,7 @@ export const updateShipment = async (req, res) => {
           name: process.env.BRAND_NAME || "Envoy",
           color: process.env.BRAND_COLOR || "#10B981",
           logoUrl: process.env.BRAND_LOGO_URL || "",
-          supportEmail: process.env.SUPPORT_EMAIL || "support@shipenvoy.com",
+          supportEmail: process.env.SUPPORT_EMAIL || "envoymailservices@gmail.com",
           address: process.env.BRAND_ADDRESS || "Envoy Logistics",
         };
 
@@ -433,7 +433,7 @@ export const notifyRecipient = async (req, res) => {
       name: process.env.BRAND_NAME || "Envoy",
       color: process.env.BRAND_COLOR || "#10B981",
       logoUrl: process.env.BRAND_LOGO_URL || "",
-      supportEmail: process.env.SUPPORT_EMAIL || "support@shipenvoy.com",
+      supportEmail: process.env.SUPPORT_EMAIL || "envoymailservices@gmail.com",
       address:
         process.env.BRAND_ADDRESS ||
         "Envoy Logistics, 21 Wharf Rd, London, UK",

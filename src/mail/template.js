@@ -31,18 +31,25 @@ function mdToHtml(md = "") {
   return `<p>${safe}</p>`;
 }
 
-// Inline SVG logo — no external fetch required.
-const INLINE_LOGO = `
+// Logo URL — uses LOGO_URL env var, falls back to /envoy.png at APP_URL.
+// We use an <img> with width/height set so most email clients render it
+// correctly. If the URL is unreachable for some recipient, the alt text
+// shows "Envoy" so the email still looks branded.
+function buildLogoBlock() {
+  const appUrl = (process.env.APP_URL || "https://www.shipenvoy.com").replace(/\/+$/, "");
+  const logoUrl = process.env.LOGO_URL || `${appUrl}/envoy.png`;
+  return `
   <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
     <tr>
-      <td style="width:32px;height:32px;background:#10b981;border-radius:8px;text-align:center;vertical-align:middle;">
-        <span style="font:900 20px Arial,sans-serif;color:#fff;display:inline-block;transform:rotate(-15deg);">✈</span>
-      </td>
-      <td style="padding-left:10px;font:900 20px -apple-system,system-ui,'Segoe UI',Arial,sans-serif;color:#0f172a;letter-spacing:-0.02em;">
-        Envoy
+      <td style="vertical-align:middle;">
+        <img src="${logoUrl}" alt="Envoy"
+             width="120" height="32"
+             style="display:block;border:0;outline:none;text-decoration:none;height:32px;width:auto;max-height:32px;" />
       </td>
     </tr>
   </table>`;
+}
+const INLINE_LOGO = buildLogoBlock();
 
 // Human-friendly status words
 const STATUS_LABELS = {
@@ -82,7 +89,7 @@ export function buildShipmentUpdateEmail({
     name: "Envoy",
     color: "#10B981",
     darkColor: "#059669",
-    supportEmail: "hello@shipenvoy.com",
+    supportEmail: process.env.SUPPORT_EMAIL || "envoymailservices@gmail.com",
     address: "Envoy Logistics, 21 Wharf Road, London N1 7GS, United Kingdom",
   },
   user = { firstName: "there", email: "user@example.com" },

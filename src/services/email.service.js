@@ -11,9 +11,15 @@ const BRAND = {
   name: "Envoy",
   color: "#10b981",
   darkColor: "#059669",
-  supportEmail: "hello@shipenvoy.com",
+  supportEmail: process.env.SUPPORT_EMAIL || "envoymailservices@gmail.com",
   address: "21 Wharf Road, London N1 7GS, UK",
 };
+
+// Public URL of the Envoy logo (served from the frontend's /public folder).
+// Override with LOGO_URL env var if hosted elsewhere.
+const LOGO_URL =
+  process.env.LOGO_URL ||
+  `${(process.env.APP_URL || "https://www.shipenvoy.com").replace(/\/+$/, "")}/envoy.png`;
 
 function escapeHtml(s = "") {
   return String(s)
@@ -53,11 +59,10 @@ function wrapEnvoyEmail({ title, preheader, bodyHtml }) {
             <td style="padding:24px 28px 20px;background:#ffffff;border-radius:16px 16px 0 0;" class="email-card">
               <table role="presentation" cellpadding="0" cellspacing="0">
                 <tr>
-                  <td style="width:32px;height:32px;background:${BRAND.color};border-radius:8px;text-align:center;vertical-align:middle;">
-                    <span style="font:900 18px Arial,sans-serif;color:#fff;display:inline-block;transform:rotate(-15deg);">✈</span>
-                  </td>
-                  <td style="padding-left:10px;font:900 20px -apple-system,system-ui,'Segoe UI',Arial,sans-serif;color:#0f172a;letter-spacing:-0.02em;">
-                    Envoy
+                  <td style="vertical-align:middle;">
+                    <img src="${LOGO_URL}" alt="Envoy"
+                         width="120" height="32"
+                         style="display:block;border:0;outline:none;text-decoration:none;height:32px;width:auto;max-height:32px;" />
                   </td>
                 </tr>
               </table>
