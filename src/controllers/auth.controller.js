@@ -1,10 +1,11 @@
-// src/controllers/auth.controller.js
+// src/controllers/auth.controller.jss
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { sendMail } from "../config/mailer.js";
 
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || "dev_secret";
 const JWT_EXPIRES = process.env.JWT_ACCESS_EXPIRES || "7d";
+
 
 // helper: make JWT
 function makeToken(user) {
