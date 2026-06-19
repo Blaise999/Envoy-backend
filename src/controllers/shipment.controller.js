@@ -770,7 +770,14 @@ export const createShipmentPublic = async (req, res) => {
 // GET /api/shipments
 export const listMyShipments = async (req, res) => {
   try {
-    const items = await Shipment.find({ userId: req.user.sub }).sort({ createdAt: -1 });
+    // .lean() returns plain objects (no Mongoose hydration overhead — roughly
+    // 3-5x less memory per doc) and .limit() caps an unbounded result set so a
+    // single request can't balloon the heap. The JSON output is unchanged
+    // (the schema doesn't serialize virtuals).
+    const items = await Shipment.find({ userId: req.user.sub })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
     return res.json(items);
   } catch (err) {
     console.error("listMyShipments error:", err);

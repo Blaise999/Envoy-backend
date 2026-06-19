@@ -7,7 +7,11 @@ import User from "../../models/User.js";
  */
 export const listUsers = async (req, res) => {
   try {
-    const users = await User.find().select("-password -otp -otpExpires");
+    const users = await User.find()
+      .select("-password -otp -otpExpires")
+      .sort({ createdAt: -1 })
+      .limit(1000)
+      .lean();
     return res.json(users);
   } catch (err) {
     console.error("❌ listUsers error:", err.message);

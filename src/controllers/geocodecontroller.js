@@ -14,9 +14,20 @@
 
 const MEMO = new Map();
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_ENTRIES = 2000;           // hard cap so the cache can't grow forever
 
 function normKey(s = "") {
   return String(s).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Insert with eviction: drop the oldest entry once we exceed the cap.
+// Map preserves insertion order, so the first key is the oldest.
+function memoSet(key, value) {
+  MEMO.set(key, value);
+  if (MEMO.size > MAX_ENTRIES) {
+    const oldest = MEMO.keys().next().value;
+    if (oldest !== undefined) MEMO.delete(oldest);
+  }
 }
 
 export async function geocode(req, res) {
@@ -43,14 +54,14 @@ export async function geocode(req, res) {
       console.error("geocode network error:", netErr?.message || netErr);
       // Cache a null result for a short period so we don't hammer on outages
       const out = { lat: null, lon: null, display: null };
-      MEMO.set(q, { t: now, data: out, ttl: 5 * 60 * 1000 });
+      memoSet(q, { t: now, data: out, ttl: 5 * 60 * 1000 });
       return res.json(out);
     }
 
     if (!r.ok) {
       // Nominatim 403/429 etc.
       const out = { lat: null, lon: null, display: null };
-      MEMO.set(q, { t: now, data: out, ttl: 5 * 60 * 1000 });
+      memoSet(q, { t: now, data: out, ttl: 5 * 60 * 1000 });
       return res.json(out);
     }
 
@@ -64,7 +75,7 @@ export async function geocode(req, res) {
         }
       : { lat: null, lon: null, display: null };
 
-    MEMO.set(q, { t: now, data: out });
+    memoSet(q, { t: now, data: out });
     return res.json(out);
   } catch (e) {
     console.error("geocode error:", e);
