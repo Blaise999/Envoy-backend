@@ -762,6 +762,7 @@ export const listMyShipments = async (req, res) => {
     // single request can't balloon the heap. The JSON output is unchanged
     // (the schema doesn't serialize virtuals).
         // Extract Videos
+        
     const rawVideos = [
       ...(Array.isArray(s.goodsVideos) ? s.goodsVideos : []),
       ...(Array.isArray(s.goodsVideosMeta) ? s.goodsVideosMeta : []),
