@@ -138,6 +138,9 @@ const ShipmentSchema = new Schema(
     goodsPhotos: { type: Schema.Types.Mixed, default: [] },
     goodsPhotosMeta: { type: Schema.Types.Mixed, default: [] },
 
+       goodsVideos: { type: Schema.Types.Mixed, default: [] },
+    goodsVideosMeta: { type: Schema.Types.Mixed, default: [] },
+
     // NEW: opaque key used on the frontend to link draft/photos → shipment
     shipmentKey: { type: String, default: "", index: true },
 

@@ -254,7 +254,9 @@ function makeContactShape(contacts = {}, fallback = {}) {
 
 /* ----------------------- photos sanitizer ----------------------- */
 
-const MAX_PHOTOS = 6;
+/* ----------------------- Media Sanitizer (Photos + Videos) ----------------------- */
+
+const MAX_MEDIA = 6;
 
 function isSafeUrl(u = "") {
   const s = String(u || "");
@@ -262,18 +264,13 @@ function isSafeUrl(u = "") {
   return /^https?:\/\//i.test(s);
 }
 
-function splitGoodsPhotos(input) {
+function splitGoodsMedia(input, type = "photo") {
   let arr = input;
 
   if (typeof arr === "string") {
     const trimmed = arr.trim();
-
     if (trimmed.startsWith("[")) {
-      try {
-        arr = JSON.parse(trimmed);
-      } catch {
-        arr = [];
-      }
+      try { arr = JSON.parse(trimmed); } catch { arr = []; }
     } else if (isSafeUrl(trimmed)) {
       arr = [trimmed];
     } else {
@@ -292,17 +289,16 @@ function splitGoodsPhotos(input) {
 
     if (typeof p === "string") {
       const s = p.trim();
-
+      // ... (same parsing logic as before)
       if (s.startsWith("{") || s.startsWith("[")) {
         try {
           const parsed = JSON.parse(s);
           const recoveredUrl = parsed?.url || parsed?.href;
-
           if (isSafeUrl(recoveredUrl)) {
             urls.push(recoveredUrl);
             meta.push({
               url: recoveredUrl,
-              name: parsed?.name || "Photo",
+              name: parsed?.name || (type === "video" ? "Video" : "Photo"),
               pathname: parsed?.pathname || "",
               size: Number(parsed?.size || 0) || 0,
               contentType: parsed?.contentType || parsed?.type || "",
@@ -312,15 +308,14 @@ function splitGoodsPhotos(input) {
           const match = s.match(/https?:\/\/[^\s'"<>\\]+/);
           if (match && isSafeUrl(match[0])) {
             urls.push(match[0]);
-            meta.push({ url: match[0], name: "Photo" });
+            meta.push({ url: match[0], name: type === "video" ? "Video" : "Photo" });
           }
         }
       } else if (isSafeUrl(s)) {
         urls.push(s);
-        meta.push({ url: s, name: "Photo" });
+        meta.push({ url: s, name: type === "video" ? "Video" : "Photo" });
       }
-
-      if (urls.length >= MAX_PHOTOS) break;
+      if (urls.length >= MAX_MEDIA) break;
       continue;
     }
 
@@ -329,40 +324,29 @@ function splitGoodsPhotos(input) {
       if (!isSafeUrl(url)) continue;
 
       const ct = String(p.contentType || p.type || "").toLowerCase();
-      if (ct && !ct.startsWith("image/")) continue;
+      if (type === "photo" && ct && !ct.startsWith("image/")) continue;
+      if (type === "video" && ct && !ct.startsWith("video/")) continue;
 
       urls.push(url);
       meta.push({
         url,
-        name: p.name || p.pathname || "Photo",
+        name: p.name || p.pathname || (type === "video" ? "Video" : "Photo"),
         pathname: p.pathname || "",
         size: Number(p.size || 0) || 0,
         contentType: p.contentType || p.type || "",
       });
 
-      if (urls.length >= MAX_PHOTOS) break;
+      if (urls.length >= MAX_MEDIA) break;
     }
   }
 
   const seen = new Set();
-
-  const cleanUrls = urls.filter((url) => {
-    if (!url || seen.has(url)) return false;
-    seen.add(url);
-    return true;
-  });
-
-  const cleanMeta = meta.filter((item, index, self) => {
-    const url = item?.url;
-    if (!url) return false;
-    return self.findIndex((x) => x?.url === url) === index;
-  });
+  const cleanUrls = urls.filter((url) => !seen.has(url) && seen.add(url));
+  const cleanMeta = meta.filter((item, index, self) => 
+    item?.url && self.findIndex(x => x?.url === item.url) === index
+  );
 
   return { urls: cleanUrls, meta: cleanMeta };
-}
-
-function sanitizeGoodsPhotos(input) {
-  return splitGoodsPhotos(input).meta;
 }
 
 /* ----------------------- controllers ----------------------- */
@@ -417,25 +401,26 @@ export const createShipment = async (req, res) => {
       userId = u?._id || null;
     }
 
-    const contacts = pickContacts(body);
+       const contacts = pickContacts(body);
 
-    const { urls: rawAuthedUrls, meta: goodsPhotoMeta } = splitGoodsPhotos(
-      body.goodsPhotos || body.parcel?.goodsPhotos || body.freight?.goodsPhotos || []
+    // === PHOTOS ===
+    const { urls: rawPhotoUrls, meta: photoMeta } = splitGoodsMedia(
+      body.goodsPhotos || body.parcel?.goodsPhotos || body.freight?.goodsPhotos || [], "photo"
     );
+    const photoClientMeta = Array.isArray(body.goodsPhotosMeta)
+      ? splitGoodsMedia(body.goodsPhotosMeta, "photo").meta : [];
+    const combinedPhotoMeta = photoMeta.length ? photoMeta : photoClientMeta;
 
-    const clientMeta = Array.isArray(body.goodsPhotosMeta)
-      ? splitGoodsPhotos(body.goodsPhotosMeta).meta
-      : [];
+    // === VIDEOS ===
+    const { urls: rawVideoUrls, meta: videoMeta } = splitGoodsMedia(
+      body.goodsVideos || body.parcel?.goodsVideos || body.freight?.goodsVideos || [], "video"
+    );
+    const videoClientMeta = Array.isArray(body.goodsVideosMeta)
+      ? splitGoodsMedia(body.goodsVideosMeta, "video").meta : [];
+    const combinedVideoMeta = videoMeta.length ? videoMeta : videoClientMeta;
 
-    const combinedMeta = goodsPhotoMeta.length ? goodsPhotoMeta : clientMeta;
-
-    const goodsPhotoUrls = (Array.isArray(rawAuthedUrls) ? rawAuthedUrls : [])
-      .map((x) => {
-        if (typeof x === "string") return x;
-        if (x && typeof x === "object" && typeof x.url === "string") return x.url;
-        return null;
-      })
-      .filter((s) => typeof s === "string" && /^https?:\/\//i.test(s));
+    const goodsPhotoUrls = rawPhotoUrls;
+    const goodsVideoUrls = rawVideoUrls;
 
     const shipmentKey = String(body.shipmentKey || body.meta?.shipmentKey || "").trim();
 
@@ -491,8 +476,10 @@ export const createShipment = async (req, res) => {
       status: "CREATED",
       timeline: [{ status: "CREATED", at: new Date(), note: "Booking created" }],
 
-      goodsPhotos: goodsPhotoUrls,
-      goodsPhotosMeta: combinedMeta,
+           goodsPhotos: goodsPhotoUrls,
+      goodsPhotosMeta: combinedPhotoMeta,
+      goodsVideos: goodsVideoUrls,
+      goodsVideosMeta: combinedVideoMeta,
       shipmentKey: shipmentKey || "",
 
       paymentMethod:
@@ -774,6 +761,22 @@ export const listMyShipments = async (req, res) => {
     // 3-5x less memory per doc) and .limit() caps an unbounded result set so a
     // single request can't balloon the heap. The JSON output is unchanged
     // (the schema doesn't serialize virtuals).
+        // Extract Videos
+    const rawVideos = [
+      ...(Array.isArray(s.goodsVideos) ? s.goodsVideos : []),
+      ...(Array.isArray(s.goodsVideosMeta) ? s.goodsVideosMeta : []),
+      ...(Array.isArray(s.meta?.goodsVideos) ? s.meta.goodsVideos : []),
+    ];
+
+    const goodsVideos = [];
+    const seen = new Set(); // reuse seen if you already have one for photos
+
+    for (const p of rawVideos) {
+      const url = typeof p === "string" ? p : p?.url || p?.href || "";
+      if (!url || seen.has(url) || !/^https?:\/\//i.test(url)) continue;
+      seen.add(url);
+      goodsVideos.push(url);
+    }
     const items = await Shipment.find({ userId: req.user.sub })
       .sort({ createdAt: -1 })
       .limit(500)
@@ -993,7 +996,8 @@ export const trackByTrackingId = async (req, res) => {
       // ✅ TrackPage-friendly field
       contact,
 
-      goodsPhotos,
+          goodsPhotos,
+      goodsVideos,        // ← Add this line
 
       shipmentKey: s.shipmentKey || s.meta?.shipmentKey || "",
 
